@@ -1,58 +1,150 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/B1K8JJS_)
-# 1. SDSU Comp/CS 605 Spring 25 Assignment 4
+[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/4X7h0Hun)
+# SDSU Comp/CS 605 Spring 25 Assignment 3: Experiments in Vectorization in C
 
-In this assignment you will implement your own reduction algorithm using MPI in Julia.
+## Dot products
 
-In particular, you should write a code to compute the (vector / pointwise) sum of data in an array to a single value on the `root` MPI rank.
+We begin by computing the dot product of two vectors
 
-
-> Useful references:
-> 1.  Article: Chan et al., [_Collective communication: theory, practice, and experience_](https://csu-sdsu.primo.exlibrisgroup.com/permalink/01CALS_SDL/10r4g1c/cdi_crossref_primary_10_1002_cpe_1206), Figure 3 (b)
-> 2. Lecture Notes from the University of Texas at Austin: Robert van de Geijn (RVDG) [_Collective Communication: Theory and Practice_](https://www.cs.utexas.edu/~rvdg/tmp/CollectiveCommunication.pdf), pages 172-184
-
-
-I have given you a naive implementation (in `naivereduce.jl`) and test (in `naivereduce_test.jl`), and you should write one that uses a Minimum Spanning Tree (MST) algorithm like what we did in [class for the broadcast](https://sdsu-comp605.github.io/spring25/lectures/module6-3_collectives.html).
-
-If you're using your own machine to test this code with, assuming your machine has at least 4 cores, test your code under 4 MPI ranks with the following command line prompt:
-
-```
-mpiexec -n 4 julia --project=. your_test.jl
+```c
+double dot_ref(size_t n, const double *a, const double *b) {
+  double sum = 0;
+  for (size_t i=0; i<n; i++)
+    sum += a[i] * b[i];
+  return sum;
+}
 ```
 
-## Assignment steps:
+This reference (vanilla) implementation has (at least) two performance bottlenecks:
 
-1. (30%) Write your own MST reduce(to-one) algorithm to sum the rank IDs of all the ranks in the whole communicator. This version should use recursion (as we've seen in class for the MST broadcast)
-2. (20%) Extend the testing code `naivereduce_test.jl` to compare the execution times of the naive implementation and your MST implementation (similar to what we did in class to compare the naive and MST broadcasts).
-3. (15%) Use the tuckoo cluster to test the execution up to 16 MPI ranks. Use the SLURM batch job script provided in [`batch_scripts/batch.jello`](https://github.com/sdsu-comp605/spring25/blob/main/batch_scripts/batch.jello) as a template and modify it accordingly to launch your program.
-4. (35%) In the attached `Report.ipynb` write a commentary and implement your own post-processing/data analysis of your execution results, producing 1 or 2 figures with detailed captions presenting the results of your study.
-  - Do not include anything else in your report other than the commentary and figures!
-  - Possible figure: Comparison of runtime versus problem size (number of MPI ranks) for the naive and Minimum Spanning Tree algorithms.
+1. Limited by memory bandwidth for large array sizes `n`.
+2. Data dependency from one loop iteration to another.
+
+The first cannot be overcome without fusing with surrounding context or parts of your program (so the dot product is performed while memory is in cache for other reasons), but the second can be addressed by techniques such as the following, which relax data dependencies by reordering operations (in this case, summing the even- and odd-indexed values separately.).
+
+```c
+double dot_opt_even_odd(size_t n, const double *a, const double *b) {
+  double sum0 = 0, sum1 = 0;
+  for (size_t i=0; i<n; i+=2) {
+    sum0 += a[i+0] * b[i+0];
+    sum1 += a[i+1] * b[i+1];
+  }
+  return sum0 + sum1;
+}
+```
+
+### Part 1: Optimizing dot product (30%)
+
+Investigate how much performance impact the even-odd index technique above has. Explain your thinking and conclusions (perhaps supported by data/graphs) by writing in the Jupyter notebook [`Report.ipynb`](Report.ipynb) Part 1 section commentary. In addition to your commentary, answer the following questions:
+
+1. Is this code correct for all values of `n`?
+2. Can this code change the numerically computed result?
+3. Can you extend this technique to increase performance further (longer vector registers and/or more instruction-level parallelism)?
+4. Can you make the unrolling factor `2` a compile-time constant, perhaps by using an inner loop?
+5. Could that unrolling factor be a run-time parameter?
+
+### Can't the compiler do this?
+
+The C standard does not allow floating point arithmetic to be reordered because it may change the computed values.
+
+From C11 §5.1.2.3:
+![C11 §5.1.2.3](c11-5.1.2.3-assoc-example.png)
+However, you may ask the compiler to attempt such optimizations anyway with the following compiler optimization flag (whose [documentation](https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html) is reported here):
+
+```
+ -ffast-math
+     Sets the options -fno-math-errno, -funsafe-math-optimizations, -ffinite-math-only, -fno-rounding-math, -fno-signaling-nans, -fcx-limited-range and -fexcess-precision=fast.
+
+      This option causes the preprocessor macro __FAST_MATH__ to be defined.
+
+      This option is not turned on by any -O option besides -Ofast since it can result in incorrect output for programs that depend on an exact implementation of IEEE or ISO rules/specifications for math functions. It may, however, yield faster code for programs that do not require the guarantees of these specifications.
+```
+This may result in unacceptable answers in other parts of your code.
+
+## Part 2: Optimizing block inner product (%70)
+
+Suppose we have many pairwise dot products to compute (like we do in a matrix-matrix multiply operation, $A B$). We can expose the rows of the matrix $A$ as
+
+```math
+A = \begin{bmatrix} {a}_{0}^{T}\\
+{a}_{1}^{T}\\
+\vdots\\
+\end{bmatrix}
+```
+
+and the columns of the matrix $B$ as
+
+$$
+ B = [b_0 | b_1 | \dots ]
+$$
 
 
-### A non-exhaustive list of things that might get you points off
 
-- Not submitting all required files (see below the "Reminders on workflow, best practices and submission requirements" section).
+We could perform the pairwise dot products by looping over each combination of vectors `[a0, a1, ...]` and vectors `[b0, b1, ...]`, computing `dot(a0, b0)`, `dot(a0, b1)`, `dot(a1, b0)`, ...
 
-- To avoid error-prone copying/pasting of your results to analyze your performance (see Part 4), you should consider modifying the testing code to print values to file rather than standart output (terminal) and then read data from file in your post-processing/data analysis code in `Report.ipynb`.
+A C code snippet for this looks like
 
-## Extra Credit:
+```c
+void bdot_ref(size_t n, const double *a, const double *b, double *c) {
+  for (size_t j=0; j<J; j++) {
+    for (size_t k=0; k<K; k++) {
+      c[j*K+k] = dot_ref(n, &a[j*n], &b[k*n]);
+    }
+  }
+}
+```
+You can think of this as performing the matrix product
 
-1. (+5%) What are the total parallel costs (in terms of number of steps and cost per step) of the naive and MST reduce algorithms? For these, you want to use the same notation as in the references, i.e., $\alpha$ and $\beta$, respectively, represent the message startup time and per data item transmission time, $\gamma$ denotes the cost required to perform an arithmetic operation (e.g. a reduction operation), and $n$ is the length of the message.
-2. (+20%) Develop your own _non-recursive_ MST reduce(to-one) algorithm and compare its execution results with the recursive MST version. Add a figure to your report with this comparison and comment on the observed performance.
+$$
+C = A^T B
+$$
+
+where $A$ and $B$ are tall matrices of size $n \times J$ and $n \times K$ respectively.
 
 
-## Reminders on workflow, best practices and submission requirements
+### 2.1 (40%)
+Write your own optimized code in the function `bdot_opt` (which now only contains a placeholder) for pairwise dot product sets of size `J=8` and `K=4` (so you'll be computing 32 inner products in total). Use the testing code provided in [`dot.c`](dot.c) to test your code and print the report.
 
-- Only changes made within the deadline (including the lateness window) will be graded.
+You can create multiple variants, with different levels or strategies for optimization, and call them all from `main`.
 
-- There is no need to tag your instructor/TA as a Reviewer in your open PR. We will review your work when ready.
+Your optimization is allowed to change the layout in memory of the matrices `A` and `B` (see the `aistride`, `ajstride`, `bistride`, and `bkstride` parameters in the code).
 
-- Remember not to attempt to close your PR. It needs to stay open for Reviewers (in this case your instructor and TAs) to review and grade your work.
+### 2.2 (30%)
+Explain your experiments and conclusions in Part 2 section of `Report.ipynb` commentary.
 
-- Always remember to double check the `File changed` tab in your PR. If you see files that should not belong there (e.g., files automatically created by your IDE or virtual environment files) remove them. Also, it is the student's responsibility to make sure that code is working (i.e., does not crash) and everything you pushed/submitted looks exactly how you intended it to be (double check typos, formatting errors, etc.).
+The following may be helpful:
 
-- If you are using an IDE that automatically creates hidden project files that you might inadvertently push to your branch, it is always a good practice to use a `.gitignore` file that specify which files you do _not_ want to be tracked by `git`, and therefore, pushed to your branch. Recall that we covered this in our [first lecture](https://sdsu-comp605.github.io/spring25/lectures/module1-1_first_class.html#git).
+* What does it mean to reorder loops?  Will it help or hurt performance?
+* Does it help to change the layout in memory (see the `aistride`, `ajstride`, `bistride`, and `bkstride` parameters in the code)?
+* Try using the [`#pragma omp simd` directive](https://sdsu-comp605.github.io/spring25/lectures/module3-2_intro_to_openmp.html) seen in class and the compiler option `-fopenmp-simd`.
 
-- You are required to submit not only your Julia code (i.e., the file with the `.jl` extension), but also the `Project.toml` and `Manifest.toml` files that are created when you instantiate your environment wehn you invoke `julia` with the `--project=.` option.
 
-- For this assignment, you are also required to submit your SLURM batch job script.
+### Submission expectations and requirements
+
+In `Report.ipynb`, document any additional information that may be needed to run your code and reproduce your results and explain what obstacles you anticipate that may prevent reproduction.
+
+If using a Python (ipykernel) kernel in your Jupyter notebook cell (and you can confirm that by looking at the top-right corner)
+
+![ipython kernel](ipython_kernel.png)
+
+
+you can use shell commands by prepending them with a bang (`!`). For instance, to compile the `dot.c` program with the GNU (`gcc`) compiler with some optimization flags you would do
+
+```
+! gcc -O3 -march=native -fopenmp dot.c -o dot
+```
+
+Note that any library needed to compile the `dot.c` program, namely `rdtsc.h`, is included in this assignment repository. To execute your program from a cell, you can use the following:
+
+```
+! OMP_NUM_THREADS=4 ./dot -r 10 -n 10000
+```
+
+This tells the `gcc` compiler (which has OpenMP capabilities) to use 4 threads and run the `dot` exectutable for `10` repetitions, and array size `n` 10000.
+
+Test your optimized blocked inner product code by running the same command but with the additional `-b` option:
+
+```
+! OMP_NUM_THREADS=4 ./dot -r 10 -n 10000 -b
+```
+
+You can add any cells to the Jupyter notebook to produce graphs/plots that corroborate your performance analysis (either in Python or Julia). You can have cells in Jupyter notebooks executed with different kernels -- just click on the Kernel menu and then Change Kernel.
