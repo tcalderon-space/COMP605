@@ -1,63 +1,44 @@
-[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/TsA0lDHW)
-# 1. SDSU Comp/CS 605 Spring 25 Assignment 5
+[![Review Assignment Due Date](https://classroom.github.com/assets/deadline-readme-button-22041afd0340ce965d47ae6ef1cefeee28c7c493a6346c4f15d667ab976d596c.svg)](https://classroom.github.com/a/B1K8JJS_)
+# 1. SDSU Comp/CS 605 Spring 25 Assignment 4
 
-In this assignment you will implement your own algorithm to reverse vectors using CUDA programming in Julia.
+In this assignment you will implement your own reduction algorithm using MPI in Julia.
 
-In [lecture 28](https://sdsu-comp605.github.io/spring25/lectures/module8-1_cuda_jl.html) in class, we learned how to set up and use the Julia CUDA interface, CUDA.jl.
-
-In this assignment, you will use parallel GPU programming in Julia to reverse a vector $A$ in place:
-
-$$
-A_i := A_{N - i + 1},
-$$
-
-where $N$ is the length of the vector.
-
-In the starter code, [reverse_vec.jl](reverse_vec.jl), we have four implementations:
+In particular, you should write a code to compute the (vector / pointwise) sum of data in an array to a single value on the `root` MPI rank.
 
 
-1. A reference (CPU) for loop-based implementation as a baseline: `reversevec!`
-2. A "fake" GPU kernel, where we manually loop over blocks of indices: `fake_knl_reversevecs!`
-3. A real double-array reverse GPU kernel that uses the built-in CUDA variables for thread index, block index and block dimension: `knl_reversevecs!`
-4. A real inplace reverse GPU kernel that uses the built-in CUDA variables for thread index, block index and block dimension: `knl_reversevecs_inplace_bad!`
-- **Note:** The `knl_reversevecs_inplace_bad!` version has a problem!
+> Useful references:
+> 1.  Article: Chan et al., [_Collective communication: theory, practice, and experience_](https://csu-sdsu.primo.exlibrisgroup.com/permalink/01CALS_SDL/10r4g1c/cdi_crossref_primary_10_1002_cpe_1206), Figure 3 (b)
+> 2. Lecture Notes from the University of Texas at Austin: Robert van de Geijn (RVDG) [_Collective Communication: Theory and Practice_](https://www.cs.utexas.edu/~rvdg/tmp/CollectiveCommunication.pdf), pages 172-184
 
-In the testing code, we also synchronize the results between GPU and CPU and time the executions.
 
-**Bandwidth analysis**:
+I have given you a naive implementation (in `naivereduce.jl`) and test (in `naivereduce_test.jl`), and you should write one that uses a Minimum Spanning Tree (MST) algorithm like what we did in [class for the broadcast](https://sdsu-comp605.github.io/spring25/lectures/module6-3_collectives.html).
 
-The `knl_reversevecs_inplace_bad!` kernel will need to load all the data once and write all the data once, so the total data movement is $2 N$. Thus, memory bandwidth can be calculated as:
+If you're using your own machine to test this code with, assuming your machine has at least 4 cores, test your code under 4 MPI ranks with the following command line prompt:
 
-```math
-\textrm{bandwidth} = 2 N * {\textrm{sizeof}(T)} / \textrm{time}
 ```
-where ${\tt \textrm{time}}$ is the kernel runtime in seconds, and $\textrm{T}$ is the float type you are executing with (it could be `Float32`, `Float64`, etc.). This will give you bandwidth in bytes per second, you likely want to divide this by $1024^3$ to convert to Gigabytes per second (Gib/s).
-
+mpiexec -n 4 julia --project=. your_test.jl
+```
 
 ## Assignment steps:
 
-1. (25%) Write your own correct `knl_reversevecs_inplace!` kernel
-2. (15%) Add testing and timing of this kernel. Your testing should include at least a correctness check.
-3. (10%) In [`Report.ipynb`](Report.ipynb) explain in your own words what problem the `knl_reversevecs_inplace_bad!` version has.
-4. (10%) In [`Report.ipynb`](Report.ipynb) provide a bandwidth analysis of the correct `knl_reversevecs_inplace!` kernel
-5. (40%) In [`Report.ipynb`](Report.ipynb) add a performance analysis that should produce at least the following two figures and related commentary. Figures that should be included:
-  5.1) Bandwidth vs problem size $N$ (you need to test for different values of $N$) for `Float64` and `Float32`.
-  5.2) A roofline plot (reference [Lecture 6](https://sdsu-comp605.github.io/spring25/lectures/module2-1_measuring_performance.html)).
+1. (30%) Write your own MST reduce(to-one) algorithm to sum the rank IDs of all the ranks in the whole communicator. This version should use recursion (as we've seen in class for the MST broadcast)
+2. (20%) Extend the testing code `naivereduce_test.jl` to compare the execution times of the naive implementation and your MST implementation (similar to what we did in class to compare the naive and MST broadcasts).
+3. (15%) Use the tuckoo cluster to test the execution up to 16 MPI ranks. Use the SLURM batch job script provided in [`batch_scripts/batch.jello`](https://github.com/sdsu-comp605/spring25/blob/main/batch_scripts/batch.jello) as a template and modify it accordingly to launch your program.
+4. (35%) In the attached `Report.ipynb` write a commentary and implement your own post-processing/data analysis of your execution results, producing 1 or 2 figures with detailed captions presenting the results of your study.
+  - Do not include anything else in your report other than the commentary and figures!
+  - Possible figure: Comparison of runtime versus problem size (number of MPI ranks) for the naive and Minimum Spanning Tree algorithms.
 
-
-## Requirements:
-
-- Your implementation should be written in Julia.
-- Kernel computations should be performed on the GPU (if you do not have an NVIDIA GPU use the `tuckoo` cluster) using the `CUDA.jl` package.
-- Your code should include checks/tests (this can either be done in the testing/driver part of the file itself or a separate testing file); this will likely be a comparison between the output of the CPU and GPU code.
 
 ### A non-exhaustive list of things that might get you points off
 
-- Forgetting to open your PR.
-
 - Not submitting all required files (see below the "Reminders on workflow, best practices and submission requirements" section).
 
-- To avoid error-prone copying/pasting of your results to analyze your performance (see Part 5), you should consider modifying the testing code to print values to file rather than standart output (terminal) and then read data from file in your post-processing/data analysis code in [`Report.ipynb`](Report.ipynb).
+- To avoid error-prone copying/pasting of your results to analyze your performance (see Part 4), you should consider modifying the testing code to print values to file rather than standart output (terminal) and then read data from file in your post-processing/data analysis code in `Report.ipynb`.
+
+## Extra Credit:
+
+1. (+5%) What are the total parallel costs (in terms of number of steps and cost per step) of the naive and MST reduce algorithms? For these, you want to use the same notation as in the references, i.e., $\alpha$ and $\beta$, respectively, represent the message startup time and per data item transmission time, $\gamma$ denotes the cost required to perform an arithmetic operation (e.g. a reduction operation), and $n$ is the length of the message.
+2. (+20%) Develop your own _non-recursive_ MST reduce(to-one) algorithm and compare its execution results with the recursive MST version. Add a figure to your report with this comparison and comment on the observed performance.
 
 
 ## Reminders on workflow, best practices and submission requirements
@@ -74,5 +55,4 @@ where ${\tt \textrm{time}}$ is the kernel runtime in seconds, and $\textrm{T}$ i
 
 - You are required to submit not only your Julia code (i.e., the file with the `.jl` extension), but also the `Project.toml` and `Manifest.toml` files that are created when you instantiate your environment wehn you invoke `julia` with the `--project=.` option.
 
-- For this assignment, if you are using the `tuckoo` cluster, you are also required to submit any SLURM batch job script that you used.
-
+- For this assignment, you are also required to submit your SLURM batch job script.
